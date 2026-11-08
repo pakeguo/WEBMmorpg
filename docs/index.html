@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>WEBM 小鎮冒險</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700&display=swap">
+<style>
+/* Layout: full-bleed Phaser canvas with DOM overlays (HUD, chat, joystick, attack) that clear device safe areas. */
+:root {
+  --bg: #0f141b;
+  --panel: rgba(14, 19, 27, .74);
+  --panel-line: rgba(255, 255, 255, .14);
+  --ink: #f3efe3;
+  --ink-dim: #aab3bf;
+  --gold: #ffcf5a;
+  --hp: #e4574f;
+  --xp: #5ec8d8;
+  --font: 'Noto Sans TC', system-ui, -apple-system, 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+  color-scheme: dark;
+}
+html, body {
+  height: 100%; margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--font); overflow: hidden; overscroll-behavior: none;
+  touch-action: none; -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+}
+#game { position: fixed; inset: 0; }
+#game canvas { display: block; }
+
+#hud {
+  position: fixed; z-index: 5; pointer-events: none;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+}
+.card {
+  background: var(--panel); border: 1px solid var(--panel-line); border-radius: 10px;
+  padding: 8px 10px; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+#me { width: min(200px, 54vw); display: flex; flex-direction: column; gap: 5px; }
+#me .row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 700; }
+#lv { color: var(--gold); font-variant-numeric: tabular-nums; }
+.bar { position: relative; height: 12px; border-radius: 6px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+.bar i { position: absolute; inset: 0 auto 0 0; width: 100%; border-radius: 6px; transition: width .15s linear; }
+.bar.hp i { background: var(--hp); }
+.bar.xp { height: 6px; }
+.bar.xp i { background: var(--xp); }
+.bar b {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 1px 2px #000;
+}
+#mapinfo { text-align: right; display: flex; flex-direction: column; gap: 2px; }
+#mapname { font-size: 13px; font-weight: 700; }
+#mapinfo small { font-size: 11px; color: var(--ink-dim); }
+
+#chat {
+  position: fixed; z-index: 4; pointer-events: none;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  top: calc(env(safe-area-inset-top, 0px) + 98px);
+  width: min(300px, 66vw); display: flex; flex-direction: column; gap: 3px;
+  font-size: 12px; line-height: 1.4; text-shadow: 0 1px 3px #000, 0 0 2px #000;
+}
+#chat div:nth-last-child(n+4) { opacity: .55; }
+#chat .who { color: var(--gold); font-weight: 700; }
+#chat .sys { color: var(--xp); }
+
+#toast {
+  position: fixed; z-index: 6; pointer-events: none; left: 50%; top: 32%;
+  transform: translateX(-50%); padding: 8px 16px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--gold); color: var(--gold);
+  font-size: 15px; font-weight: 700; opacity: 0; white-space: nowrap;
+}
+#toast.show { animation: toast 1.8s ease-out both; }
+@keyframes toast { 0% { opacity: 0 } 12% { opacity: 1 } 75% { opacity: 1 } 100% { opacity: 0 } }
+
+#stick {
+  position: fixed; z-index: 5; touch-action: none;
+  left: max(18px, calc(env(safe-area-inset-left, 0px) + 10px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  width: 128px; height: 128px; border-radius: 50%;
+  background: rgba(255, 255, 255, .08); border: 2px solid rgba(255, 255, 255, .28);
+}
+#knob {
+  position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; border-radius: 50%;
+  transform: translate(-50%, -50%); background: rgba(255, 255, 255, .38);
+  border: 2px solid rgba(255, 255, 255, .55); pointer-events: none;
+}
+#atk {
+  position: fixed; z-index: 5; touch-action: none; font-family: var(--font);
+  right: max(22px, calc(env(safe-area-inset-right, 0px) + 12px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 40px);
+  width: 92px; height: 92px; border-radius: 50%; padding: 0;
+  background: rgba(228, 87, 79, .82); border: 3px solid var(--gold); color: #fff;
+  font-size: 17px; font-weight: 700; letter-spacing: .08em;
+}
+#atk:active, #atk.down { transform: scale(.93); background: rgba(228, 87, 79, 1); }
+#atk:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+#hint {
+  position: fixed; z-index: 4; pointer-events: none; left: 50%; transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); font-size: 12px; color: var(--ink-dim);
+  padding: 5px 12px; border-radius: 999px; background: var(--panel); white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) { #toast.show { animation-duration: 3s } .bar i { transition: none } }
+</style>
+
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud">
+  <div id="me" class="card">
+    <div class="row"><span id="lv">Lv 1</span><span id="pname">旅人</span></div>
+    <div class="bar hp"><i id="hpfill"></i><b id="hptext">100 / 100</b></div>
+    <div class="bar xp"><i id="xpfill" style="width:0%"></i></div>
+  </div>
+  <div id="mapinfo" class="card"><span id="mapname">新手小鎮</span><small id="near">單機示範</small></div>
+</div>
+<div id="chat" aria-live="polite"></div>
+<div id="toast" role="status"></div>
+<div id="stick" hidden><div id="knob"></div></div>
+<button id="atk" type="button" hidden>攻擊</button>
+<div id="hint">WASD / 方向鍵移動 · 空白鍵攻擊</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
+<script>
+(() => {
+'use strict';
+const T = 32;
+const SOLID = new Set([1, 2, 5]); // tree, water, building
+const FONT = '"Noto Sans TC", system-ui, sans-serif';
+const $ = (id) => document.getElementById(id);
+
+/* ---------- helpers ---------- */
+function rng(seed) {
+  let a = seed | 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const grid = (w, h, v) => Array.from({ length: h }, () => Array(w).fill(v));
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+/* ---------- maps (0 grass, 1 tree, 2 water, 3 path, 4 portal, 5 building) ---------- */
+function buildTown() {
+  const W = 30, H = 22, m = grid(W, H, 0), r = rng(11);
+  for (let x = 0; x < W; x++) { m[0][x] = 1; m[H - 1][x] = 1; }
+  for (let y = 0; y < H; y++) { m[y][0] = 1; m[y][W - 1] = 1; }
+  for (let x = 1; x < W - 1; x++) m[11][x] = 3;
+  for (let y = 1; y < H - 1; y++) m[y][9] = 3;
+  const house = (x, y, w, h, dx, down) => {
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) m[y + j][x + i] = 5;
+    if (down) { m[y + h - 1][x + dx] = 3; for (let k = y + h; k < 11; k++) m[k][x + dx] = 3; }
+    else { m[y][x + dx] = 3; for (let k = y - 1; k > 11; k--) m[k][x + dx] = 3; }
+  };
+  house(2, 2, 5, 4, 2, true); house(11, 2, 6, 4, 2, true); house(20, 2, 6, 4, 2, true);
+  house(3, 15, 5, 4, 2, false); house(12, 15, 6, 4, 2, false); house(21, 15, 5, 4, 2, false);
+  for (let y = 7; y <= 9; y++) for (let x = 15; x <= 18; x++) m[y][x] = 2;
+  for (let n = 0; n < 16; n++) {
+    const x = 1 + Math.floor(r() * (W - 2)), y = 1 + Math.floor(r() * (H - 2));
+    if (m[y][x] === 0) m[y][x] = 1;
+  }
+  m[11][28] = 4;
+  return { id: 'town', name: '新手小鎮', w: W, h: H, tiles: m, safe: true,
+    portal: { label: '野外草原 →', to: 'field', tx: 3, ty: 12 }, portalAt: { x: 28, y: 11 } };
+}
+function buildField() {
+  const W = 44, H = 30, m = grid(W, H, 0), r = rng(42);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) if (r() < 0.085) m[y][x] = 1;
+  for (let n = 0; n < 6; n++) {
+    const cx = 10 + Math.floor(r() * 30), cy = 4 + Math.floor(r() * 22), rad = 2 + r() * 1.6;
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++)
+      if (Math.hypot(x - cx, y - cy) < rad) m[y][x] = 2;
+  }
+  for (let x = 0; x < W; x++) { m[0][x] = 1; m[H - 1][x] = 1; }
+  for (let y = 0; y < H; y++) { m[y][0] = 1; m[y][W - 1] = 1; }
+  for (let y = 8; y <= 16; y++) for (let x = 1; x <= 6; x++) m[y][x] = 0;
+  for (let x = 2; x <= 6; x++) m[12][x] = 3;
+  m[12][1] = 4;
+  return { id: 'field', name: '史萊姆草原', w: W, h: H, tiles: m, safe: false,
+    portal: { label: '← 新手小鎮', to: 'town', tx: 27, ty: 11 }, portalAt: { x: 1, y: 12 } };
+}
+
+/* ---------- collision ---------- */
+const solidAt = (m, px, py) => {
+  const tx = Math.floor(px / T), ty = Math.floor(py / T);
+  if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return true;
+  return SOLID.has(m.tiles[ty][tx]);
+};
+const blocked = (m, x, y, r) => solidAt(m, x - r, y - r) || solidAt(m, x + r, y - r) || solidAt(m, x - r, y + r) || solidAt(m, x + r, y + r);
+const move = (m, e, dx, dy, r) => {
+  if (!blocked(m, e.x + dx, e.y, r)) e.x += dx;
+  if (!blocked(m, e.x, e.y + dy, r)) e.y += dy;
+};
+
+/* ---------- DOM UI ---------- */
+let toastTimer = 0;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+  clearTimeout(toastTimer);
+}
+function addChat(who, text) {
+  const box = $('chat'), row = document.createElement('div');
+  if (who) {
+    const w = document.createElement('span'); w.className = 'who'; w.textContent = who + '：';
+    row.append(w, document.createTextNode(text));
+  } else { row.className = 'sys'; row.textContent = text; }
+  box.append(row);
+  while (box.children.length > 5) box.firstChild.remove();
+}
+
+/* ---------- input ---------- */
+const keys = {};
+const joy = { x: 0, y: 0 };
+let atkHeld = false;
+window.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+});
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function setupTouch() {
+  const stick = $('stick'), knob = $('knob'), atk = $('atk');
+  let sid = null;
+  const upd = (e) => {
+    const r = stick.getBoundingClientRect(), max = r.width / 2 - 26;
+    let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    const d = Math.hypot(dx, dy);
+    if (d > max) { dx *= max / d; dy *= max / d; }
+    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    const m = Math.hypot(dx, dy) / max;
+    joy.x = m < 0.15 ? 0 : dx / max; joy.y = m < 0.15 ? 0 : dy / max;
+  };
+  const end = (e) => {
+    if (e.pointerId !== sid) return;
+    sid = null; joy.x = joy.y = 0; knob.style.transform = 'translate(-50%, -50%)';
+  };
+  stick.addEventListener('pointerdown', (e) => { sid = e.pointerId; stick.setPointerCapture(e.pointerId); upd(e); e.preventDefault(); });
+  stick.addEventListener('pointermove', (e) => { if (e.pointerId === sid) upd(e); });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => stick.addEventListener(t, end));
+  atk.addEventListener('pointerdown', (e) => { atkHeld = true; atk.classList.add('down'); atk.setPointerCapture(e.pointerId); e.preventDefault(); });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => atk.addEventListener(t, () => { atkHeld = false; atk.classList.remove('down'); }));
+}
+function showTouch() {
+  $('stick').hidden = false; $('atk').hidden = false; $('hint').hidden = true;
+}
+setupTouch();
+if (matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0) showTouch();
+else window.addEventListener('touchstart', showTouch, { once: true, passive: true });
+
+/* ---------- textures (all drawn in code, no external assets) ---------- */
+function makeTextures(scene) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const r = rng(7);
+  const specks = (ox, col, n, size) => {
+    g.fillStyle(col, 1);
+    for (let i = 0; i < n; i++) g.fillRect(ox + Math.floor(r() * (T - size)), Math.floor(r() * (T - size)), size, size);
+  };
+  // 0 grass
+  g.fillStyle(0x5f9f4a); g.fillRect(0, 0, T, T);
+  specks(0, 0x54903f, 9, 2); specks(0, 0x6cb056, 6, 2);
+  // 1 tree
+  let o = T;
+  g.fillStyle(0x5f9f4a); g.fillRect(o, 0, T, T); specks(o, 0x54903f, 7, 2);
+  g.fillStyle(0x6b4a2b); g.fillRect(o + 14, 20, 5, 10);
+  g.fillStyle(0x2b6335); g.fillCircle(o + 16, 14, 13);
+  g.fillStyle(0x3c8247); g.fillCircle(o + 12, 11, 8);
+  // 2 water
+  o = T * 2;
+  g.fillStyle(0x3b78b8); g.fillRect(o, 0, T, T);
+  g.fillStyle(0x66a3dc); g.fillRect(o + 4, 8, 10, 2); g.fillRect(o + 18, 20, 9, 2); g.fillRect(o + 8, 26, 6, 2);
+  // 3 path
+  o = T * 3;
+  g.fillStyle(0xc8b27a); g.fillRect(o, 0, T, T); specks(o, 0xb89f66, 8, 2); specks(o, 0xd6c28f, 5, 2);
+  // 4 portal
+  o = T * 4;
+  g.fillStyle(0x2d2150); g.fillRect(o, 0, T, T);
+  g.fillStyle(0x6a3fb0); g.fillCircle(o + 16, 16, 14);
+  g.fillStyle(0x8e5bd0); g.fillCircle(o + 16, 16, 10);
+  g.fillStyle(0xc9a6ff); g.fillCircle(o + 16, 16, 5);
+  // 5 building
+  o = T * 5;
+  g.fillStyle(0xa8553f); g.fillRect(o, 0, T, T);
+  g.fillStyle(0x8c4331); for (let y = 6; y < T; y += 8) g.fillRect(o, y, T, 2);
+  g.fillStyle(0xc4705a); g.fillRect(o, 0, T, 2);
+  g.generateTexture('tiles', T * 6, T);
+  g.clear();
+
+  const person = (key, body, hair) => {
+    g.clear();
+    g.fillStyle(0x000000, 0.28); g.fillEllipse(16, 27, 18, 6);
+    g.fillStyle(body); g.fillRoundedRect(9, 14, 14, 12, 4);
+    g.fillStyle(0xf1c9a0); g.fillCircle(16, 11, 7);
+    g.fillStyle(hair); g.fillRect(9, 3, 14, 6); g.fillRect(9, 3, 3, 10);
+    g.fillStyle(0x222222); g.fillRect(13, 11, 2, 3); g.fillRect(18, 11, 2, 3);
+    g.generateTexture(key, T, T);
+  };
+  person('hero', 0x3e7fd1, 0x3a2a1c);
+  person('npc0', 0xd1623e, 0x1f1f1f);
+  person('npc1', 0x7a4fb8, 0xd9b04a);
+  person('npc2', 0x2f9d6f, 0x7a3b2e);
+  g.clear();
+  g.fillStyle(0x000000, 0.28); g.fillEllipse(16, 27, 22, 6);
+  g.fillStyle(0x3f9a3a); g.fillEllipse(16, 20, 24, 18);
+  g.fillStyle(0x7ed957); g.fillEllipse(16, 18, 22, 16);
+  g.fillStyle(0xb5f08d); g.fillEllipse(12, 13, 8, 4);
+  g.fillStyle(0x16301a); g.fillCircle(12, 19, 2); g.fillCircle(20, 19, 2);
+  g.generateTexture('slime', T, T);
+  g.destroy();
+}
+
+/* ---------- game ---------- */
+const NAMES = {
+  town: [['阿凱', 'npc0'], ['小翼', 'npc1'], ['Mika', 'npc2']],
+  field: [['白狼', 'npc1'], ['Luna', 'npc0']],
+};
+const LINES = ['野外的史萊姆好多！', '有人要組隊嗎？', '我剛升到 Lv5 了', '傳送點在小鎮東邊', '這裡的池塘好漂亮', '史萊姆打一下就倒了', '晚點見～', '手機也能玩耶'];
+const need = (lv) => 30 + 25 * (lv - 1);
+
+class Main extends Phaser.Scene {
+  create() {
+    makeTextures(this);
+    this.maps = { town: buildTown(), field: buildField() };
+    this.P = { x: 0, y: 0, hp: 100, max: 100, lv: 1, xp: 0, face: { x: 0, y: 1 }, atkT: 0, inv: 0, portalT: 0, moving: false };
+    this.stuff = []; this.slimes = []; this.fakes = [];
+    this.gfx = this.add.graphics().setDepth(9000);
+    this.player = this.add.sprite(0, 0, 'hero');
+    this.pLabel = this.label('旅人', '#9fe6ff');
+    this.hudT = 0; this.chatT = 6;
+    addChat(null, '歡迎來到 WEBM 小鎮冒險（單機示範）');
+    addChat(null, '到小鎮東邊的紫色傳送點，去野外打史萊姆。');
+    this.loadMap('town', 6, 11);
+    this.fit();
+    this.scale.on('resize', () => this.fit());
+  }
+
+  label(text, color) {
+    return this.add.text(0, 0, text, { fontFamily: FONT, fontSize: '11px', fontStyle: 'bold', color, stroke: '#000', strokeThickness: 3 })
+      .setOrigin(0.5, 1).setDepth(9500).setResolution(2);
+  }
+  fit() {
+    const w = this.scale.width, h = this.scale.height;
+    this.cameras.main.setZoom(Math.max(1.1, Math.min(2.2, Math.min(w, h) / 300)));
+  }
+  float(x, y, text, color) {
+    const t = this.add.text(x, y - 22, text, { fontFamily: FONT, fontSize: '14px', fontStyle: 'bold', color, stroke: '#000', strokeThickness: 3 })
+      .setOrigin(0.5).setDepth(10000).setResolution(2);
+    this.tweens.add({ targets: t, y: t.y - 28, alpha: 0, duration: 800, onComplete: () => t.destroy() });
+  }
+
+  loadMap(id, tx, ty) {
+    this.stuff.forEach((o) => o.destroy());
+    this.stuff = []; this.slimes = []; this.fakes = [];
+    const m = this.maps[id]; this.map = m;
+    const tm = this.make.tilemap({ data: m.tiles, tileWidth: T, tileHeight: T });
+    const ts = tm.addTilesetImage('tiles', 'tiles', T, T, 0, 0);
+    tm.createLayer(0, ts, 0, 0).setDepth(0);
+    this.stuff.push(tm);
+
+    const px = m.portalAt.x * T + T / 2, py = m.portalAt.y * T + T / 2;
+    const glow = this.add.circle(px, py, 15, 0xc9a6ff, 0.35).setDepth(1);
+    this.tweens.add({ targets: glow, scale: 1.5, alpha: 0.1, duration: 900, yoyo: true, repeat: -1 });
+    const sign = this.add.text(px, py - 24, m.portal.label, { fontFamily: FONT, fontSize: '11px', fontStyle: 'bold', color: '#e6d6ff', stroke: '#000', strokeThickness: 3 })
+      .setOrigin(0.5, 1).setDepth(9400).setResolution(2);
+    this.stuff.push(glow, sign);
+
+    const P = this.P;
+    P.x = tx * T + T / 2; P.y = ty * T + T / 2; P.portalT = 1.2;
+    const cam = this.cameras.main;
+    cam.setBounds(0, 0, m.w * T, m.h * T); cam.setBackgroundColor(0x10151d);
+    cam.stopFollow(); cam.startFollow(this.player, true, 0.12, 0.12); cam.centerOn(P.x, P.y);
+
+    if (!m.safe) for (let i = 0; i < 14; i++) this.spawnSlime();
+    const ax = id === 'town' ? 13 * T : 12 * T, ay = id === 'town' ? 11 * T : 12 * T;
+    NAMES[id].forEach(([name, tex]) => {
+      const p = this.freeNear(ax, ay, 90);
+      const spr = this.add.sprite(p.x, p.y, tex), lab = this.label(name, '#ffe9a8');
+      this.stuff.push(spr, lab);
+      this.fakes.push({ name, spr, lab, x: p.x, y: p.y, hx: p.x, hy: p.y, t: Math.random() * 2, tgt: null, bubble: null, bt: 0 });
+    });
+    $('mapname').textContent = m.name;
+    $('near').textContent = `附近 ${this.fakes.length + 1} 人 · 單機示範`;
+  }
+
+  freeNear(ax, ay, rad) {
+    for (let i = 0; i < 60; i++) {
+      const x = ax + (Math.random() - 0.5) * rad * 2, y = ay + (Math.random() - 0.5) * rad * 2;
+      if (!blocked(this.map, x, y, 9)) return { x, y };
+    }
+    return { x: ax, y: ay };
+  }
+
+  spawnSlime(s) {
+    const m = this.map;
+    let x = 0, y = 0;
+    for (let i = 0; i < 100; i++) {
+      const tx = 8 + Math.floor(Math.random() * (m.w - 10)), ty = 1 + Math.floor(Math.random() * (m.h - 2));
+      x = tx * T + T / 2; y = ty * T + T / 2;
+      if (m.tiles[ty][tx] === 0 && Math.hypot(x - this.P.x, y - this.P.y) > 200) break;
+    }
+    if (!s) {
+      const spr = this.add.sprite(x, y, 'slime');
+      this.stuff.push(spr);
+      s = { spr, x, y, hp: 30, max: 30, alive: true, t: 0, dir: { x: 0, y: 0 }, cd: 0, rt: 0, ph: Math.random() * 6 };
+      this.slimes.push(s);
+    }
+    s.x = x; s.y = y; s.hp = s.max; s.alive = true; s.spr.setVisible(true);
+  }
+
+  addXp(n) {
+    const P = this.P;
+    P.xp += n;
+    this.float(P.x, P.y - 10, `+${n} EXP`, '#5ec8d8');
+    while (P.xp >= need(P.lv)) {
+      P.xp -= need(P.lv); P.lv++; P.max += 15; P.hp = P.max;
+      toast(`升級！Lv ${P.lv}`);
+      addChat(null, `你升到了 Lv ${P.lv}，生命上限提升。`);
+    }
+  }
+  hurt(n) {
+    const P = this.P;
+    P.hp -= n; P.inv = 0.4;
+    this.float(P.x, P.y, `-${n}`, '#ff7d73');
+    this.player.setTintFill(0xff5a50);
+    this.time.delayedCall(90, () => this.player.clearTint());
+    this.cameras.main.shake(110, 0.004);
+    if (P.hp <= 0) {
+      toast('你倒下了，回到小鎮');
+      addChat(null, '你被史萊姆打倒，已回到小鎮。');
+      P.hp = P.max;
+      this.loadMap('town', 6, 11);
+    }
+  }
+  hit(s) {
+    const P = this.P, dmg = 10 + P.lv * 2 + Math.floor(Math.random() * 5);
+    s.hp -= dmg;
+    this.float(s.x, s.y, `${dmg}`, '#fff3c4');
+    s.spr.setTintFill(0xffffff);
+    this.time.delayedCall(80, () => s.spr.clearTint());
+    const d = Math.max(1, Math.hypot(s.x - P.x, s.y - P.y));
+    move(this.map, s, (s.x - P.x) / d * 12, (s.y - P.y) / d * 12, 9);
+    if (s.hp <= 0) { s.alive = false; s.spr.setVisible(false); s.rt = 7; this.addXp(18); }
+  }
+  attack() {
+    const P = this.P; P.atkT = 0.45;
+    let best = null, bd = 90;
+    for (const s of this.slimes) if (s.alive) {
+      const d = Math.hypot(s.x - P.x, s.y - P.y);
+      if (d < bd) { bd = d; best = s; }
+    }
+    if (best) { const d = Math.max(1, bd); P.face = { x: (best.x - P.x) / d, y: (best.y - P.y) / d }; }
+    const ang = Math.atan2(P.face.y, P.face.x);
+    const sl = this.add.graphics().setDepth(9500);
+    sl.lineStyle(5, 0xfff3c4, 0.95); sl.beginPath(); sl.arc(P.x, P.y, 40, ang - 0.9, ang + 0.9); sl.strokePath();
+    this.tweens.add({ targets: sl, alpha: 0, duration: 180, onComplete: () => sl.destroy() });
+    for (const s of this.slimes) if (s.alive) {
+      const dx = s.x - P.x, dy = s.y - P.y, d = Math.hypot(dx, dy);
+      if (d < 64 && (d < 1 || (dx * P.face.x + dy * P.face.y) / d > -0.1)) this.hit(s);
+    }
+  }
+  say(f, text) {
+    if (f.bubble) f.bubble.destroy();
+    f.bubble = this.add.text(f.x, f.y - 40, text, { fontFamily: FONT, fontSize: '11px', color: '#fff', backgroundColor: 'rgba(14,19,27,.85)', padding: { x: 6, y: 3 } })
+      .setOrigin(0.5, 1).setDepth(9600).setResolution(2);
+    this.stuff.push(f.bubble); f.bt = 4;
+    addChat(f.name, text);
+  }
+
+  update(time, delta) {
+    const dt = Math.min(delta / 1000, 0.05), P = this.P, m = this.map;
+
+    let ix = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+    let iy = (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0);
+    if (ix || iy) { const n = Math.hypot(ix, iy); ix /= n; iy /= n; }
+    if (joy.x || joy.y) { ix = joy.x; iy = joy.y; }
+    const mag = Math.min(1, Math.hypot(ix, iy));
+    P.moving = mag > 0;
+    if (P.moving) {
+      move(m, P, ix * 140 * dt, iy * 140 * dt, 9);
+      const n = Math.hypot(ix, iy); P.face = { x: ix / n, y: iy / n };
+    }
+    P.atkT -= dt; P.inv -= dt; P.portalT -= dt;
+    if ((atkHeld || keys.Space || keys.KeyJ) && P.atkT <= 0) this.attack();
+
+    if (P.portalT <= 0 && m.tiles[Math.floor(P.y / T)][Math.floor(P.x / T)] === 4) {
+      const to = m.portal;
+      toast(`前往 ${this.maps[to.to].name}`);
+      this.loadMap(to.to, to.tx, to.ty);
+      return;
+    }
+    if (m.safe) P.hp = Math.min(P.max, P.hp + 6 * dt);
+
+    for (const s of this.slimes) {
+      if (!s.alive) {
+        s.rt -= dt;
+        if (s.rt <= 0) this.spawnSlime(s);
+        continue;
+      }
+      const dx = P.x - s.x, dy = P.y - s.y, d = Math.hypot(dx, dy);
+      let vx, vy;
+      if (d < 150) { vx = dx / d * 62; vy = dy / d * 62; }
+      else {
+        s.t -= dt;
+        if (s.t <= 0) {
+          s.t = 1 + Math.random() * 2;
+          const a = Math.random() * Math.PI * 2;
+          s.dir = Math.random() < 0.4 ? { x: 0, y: 0 } : { x: Math.cos(a), y: Math.sin(a) };
+        }
+        vx = s.dir.x * 24; vy = s.dir.y * 24;
+      }
+      move(m, s, vx * dt, vy * dt, 9);
+      s.cd -= dt;
+      if (d < 24 && s.cd <= 0 && P.inv <= 0) {
+        s.cd = 1; this.hurt(5 + Math.floor(P.lv / 2));
+        if (this.map !== m) return;
+      }
+      s.spr.setPosition(s.x, s.y).setDepth(s.y).setScale(1 + 0.05 * Math.sin(time * 0.008 + s.ph), 1 - 0.07 * Math.sin(time * 0.008 + s.ph));
+    }
+
+    for (const f of this.fakes) {
+      f.t -= dt;
+      if (f.t <= 0) {
+        f.t = 2 + Math.random() * 3;
+        f.tgt = Math.random() < 0.3 ? null : { x: f.hx + (Math.random() - 0.5) * 220, y: f.hy + (Math.random() - 0.5) * 160 };
+      }
+      if (f.tgt) {
+        const dx = f.tgt.x - f.x, dy = f.tgt.y - f.y, d = Math.hypot(dx, dy);
+        if (d < 4) f.tgt = null; else move(m, f, dx / d * 46 * dt, dy / d * 46 * dt, 9);
+      }
+      f.spr.setPosition(f.x, f.y).setDepth(f.y);
+      f.lab.setPosition(f.x, f.y - 20);
+      if (f.bubble) {
+        f.bt -= dt;
+        if (f.bt <= 0) { f.bubble.destroy(); f.bubble = null; } else f.bubble.setPosition(f.x, f.y - 34);
+      }
+    }
+    this.chatT -= dt;
+    if (this.chatT <= 0 && this.fakes.length) { this.chatT = 7 + Math.random() * 8; this.say(pick(this.fakes), pick(LINES)); }
+
+    this.player.setPosition(P.x, P.y).setDepth(P.y);
+    this.player.setScale(1, P.moving ? 1 + 0.05 * Math.sin(time * 0.02) : 1);
+    this.pLabel.setPosition(P.x, P.y - 20);
+
+    const g = this.gfx; g.clear();
+    for (const s of this.slimes) if (s.alive && s.hp < s.max) {
+      g.fillStyle(0x000000, 0.6); g.fillRect(s.x - 13, s.y - 22, 26, 5);
+      g.fillStyle(0xe4574f, 1); g.fillRect(s.x - 12, s.y - 21, 24 * s.hp / s.max, 3);
+    }
+
+    this.hudT -= dt;
+    if (this.hudT <= 0) {
+      this.hudT = 0.1;
+      const hp = Math.max(0, Math.ceil(P.hp));
+      $('lv').textContent = `Lv ${P.lv}`;
+      $('hpfill').style.width = (100 * Math.max(0, P.hp) / P.max) + '%';
+      $('hptext').textContent = `${hp} / ${P.max}`;
+      $('xpfill').style.width = (100 * P.xp / need(P.lv)) + '%';
+    }
+  }
+}
+
+new Phaser.Game({
+  type: Phaser.AUTO,
+  parent: 'game',
+  backgroundColor: '#10151d',
+  scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' },
+  render: { antialias: true, roundPixels: true },
+  input: { keyboard: false, mouse: false, touch: false, gamepad: false },
+  scene: Main,
+});
+})();
+</script>
+
+</body>
+</html>
